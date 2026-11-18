@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/vivaui/viva/app"
-	"github.com/vivaui/viva/gfx"
 	"github.com/vivaui/viva/ui"
 )
 
@@ -111,8 +110,12 @@ func TestSaveWritesTheNote(t *testing.T) {
 	if !enabled(driver, "保存") {
 		t.Fatal("保存 is disabled after the note changed")
 	}
-	if err := driver.Chord(gfx.ModifierControl, "s"); err != nil {
+	handled, err := driver.ShortcutChord(ui.Primary, 's')
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !handled {
+		t.Fatal("the Primary+S shortcut did not reach the application")
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
