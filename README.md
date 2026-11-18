@@ -11,8 +11,8 @@ Markdown 笔记应用。界面与交互参考 [motty](https://github.com/t8y2/mo
 
 | 平台 | 文件 |
 | --- | --- |
-| macOS · Apple Silicon（M 系列） | `mdnote-0.2.0-darwin-arm64.zip` |
-| macOS · Intel | `mdnote-0.2.0-darwin-amd64.zip` |
+| macOS · Apple Silicon（M 系列） | `mdnote-0.2.1-darwin-arm64.zip` |
+| macOS · Intel | `mdnote-0.2.1-darwin-amd64.zip` |
 | Windows x64 | `mdnote.exe` |
 | Linux x64 | `mdnote` |
 
