@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -34,6 +35,7 @@ type dialog int
 const (
 	noDialog dialog = iota
 	newDialog
+	mkdirDialog
 	renameDialog
 	deleteDialog
 )
@@ -82,10 +84,19 @@ type model struct {
 	watch       *app.DirectoryWatch
 	changes     []string
 
-	menu   bool
-	dlg    dialog
+	menu       bool
+	exportOpen bool
+	dlg        dialog
 	name   string
 	target string
+
+	// Auto-save: the editor arms a timer when the text changes and the timer
+	// wakes the window, which writes the note. autoOn turns it off.
+	autoOn   bool
+	autoCh   chan struct{}
+	autoText string
+	autoDone bool
+	timer    *time.Timer
 
 	// Method values made once: a method value made in a paint allocates.
 	label   func(int) string
@@ -98,9 +109,11 @@ type model struct {
 
 func newModel() *model {
 	m := &model{
-		theme: gfx.LightTheme(),
-		modes: []mode{editOnly, splitView, previewOnly},
-		split: ui.SplitterState{Pos: 260},
+		theme:  gfx.LightTheme(),
+		modes:  []mode{editOnly, splitView, previewOnly},
+		split:  ui.SplitterState{Pos: 260},
+		autoOn: true,
+		autoCh: make(chan struct{}, 1),
 	}
 	m.label = m.rowLabel
 	m.nodeAt = m.rowNode
@@ -124,6 +137,7 @@ func (m *model) page(c ui.C) {
 	if ui.Shortcut(c, ui.Primary, "n") {
 		m.beginNew("")
 	}
+	m.autoArm()
 
 	ui.Column(c).Fill().Children(func() {
 		m.toolbar(c)
@@ -152,8 +166,7 @@ func (m *model) toolbar(c ui.C) {
 		if save.Clicked() {
 			m.save()
 		}
-		ui.Spacer(c)
-		ui.Tabs(c, &m.mode, m.modes, m.modeOf)
+		m.exportMenu(c)
 		ui.Spacer(c)
 		m.moreMenu(c)
 		if ui.Button(c, m.themeLabel()).Outline().Clicked() {
@@ -171,6 +184,9 @@ func (m *model) moreMenu(c ui.C) {
 		if menu.Item("新建文件").Disabled(m.root == "").Clicked() {
 			m.beginNew(m.folderOf(m.sel))
 		}
+		if menu.Item("新建文件夹").Disabled(m.root == "").Clicked() {
+			m.beginNewFolder(m.folderOf(m.sel))
+		}
 		if menu.Item("重命名").Disabled(m.sel == "").Clicked() {
 			m.beginRename()
 		}
@@ -178,11 +194,53 @@ func (m *model) moreMenu(c ui.C) {
 			m.beginDelete()
 		}
 		menu.Separator()
+		if menu.Item("导入 Word…").Disabled(m.root == "").Clicked() {
+			m.importWord()
+		}
+		menu.Sub("导出为", func(sub *ui.MenuItems) {
+			if sub.Item("Word (.docx)").Disabled(m.path == "").Clicked() {
+				m.exportAs("docx")
+			}
+			if sub.Item("HTML (.html)").Disabled(m.path == "").Clicked() {
+				m.exportAs("html")
+			}
+			if sub.Item("纯文本 (.txt)").Disabled(m.path == "").Clicked() {
+				m.exportAs("txt")
+			}
+		})
+		menu.Separator()
+		if menu.Item("自动保存").Checked(m.autoOn).Clicked() {
+			m.autoOn = !m.autoOn
+			if m.autoOn {
+				m.autoArm()
+			}
+		}
+		menu.Separator()
 		if menu.Item("在文件管理器中显示").Disabled(m.sel == "").Clicked() {
 			app.RevealPath(m.sel)
 		}
 		if menu.Item("重新扫描").Disabled(m.root == "").Clicked() {
 			m.rescan()
+		}
+	})
+}
+
+// exportMenu is the toolbar's 导出 button: a menu of the formats a note can be
+// written as.
+func (m *model) exportMenu(c ui.C) {
+	anchor := ui.Button(c, "导出").Outline().Disabled(m.path == "")
+	if anchor.Clicked() {
+		m.exportOpen = !m.exportOpen
+	}
+	ui.Menu(c, anchor, &m.exportOpen, func(menu *ui.MenuItems) {
+		if menu.Item("Word (.docx)").Clicked() {
+			m.exportAs("docx")
+		}
+		if menu.Item("HTML (.html)").Clicked() {
+			m.exportAs("html")
+		}
+		if menu.Item("纯文本 (.txt)").Clicked() {
+			m.exportAs("txt")
 		}
 	})
 }
@@ -237,7 +295,14 @@ func (m *model) workspace(c ui.C) {
 				})
 			})
 		}
+		m.modeSwitcher(c)
 	})
+}
+
+// modeSwitcher is the 编辑 / 分栏 / 预览 control. It floats, small, in the bottom
+// right corner of the workspace, so it stays out of the note's way.
+func (m *model) modeSwitcher(c ui.C) {
+	ui.Choice(c, &m.mode, m.modes, m.modeOf).Absolute().Bottom(10).Right(10).FontSize(12)
 }
 
 func (m *model) editor(c ui.C) {
@@ -254,7 +319,7 @@ func (m *model) preview(c ui.C, width float32) {
 // paintPreview paints the laid-out document into the slot it was declared in.
 func (m *model) paintPreview(d *ui.DrawContext) {
 	m.view.Paint(d.Canvas, components.MarkdownPaint{
-		Look: components.MarkdownLookFor(m.theme),
+		Look: markdownLook(m.theme, m.dark),
 		X:    d.Rect.X,
 		Y:    d.Rect.Y,
 	})
@@ -272,6 +337,7 @@ func (m *model) layoutPreview(canvas *gfx.Canvas, width float32) {
 		Size:       m.theme.Metrics.FontSizeM,
 		LineHeight: 22,
 		CodeInset:  28,
+		Highlight:  highlightCode,
 	}, &m.doc, width)
 }
 
@@ -285,6 +351,8 @@ func (m *model) statusbar(c ui.C) {
 		ui.Spacer(c)
 		if m.path != "" && m.text != m.saved {
 			ui.Text(c, "未保存").Color(m.theme.Danger)
+		} else if m.autoDone {
+			ui.Text(c, "已自动保存").Muted()
 		}
 		ui.Text(c, m.stats()).Muted()
 	})
@@ -310,8 +378,25 @@ func (m *model) modals(c ui.C) {
 		if !open {
 			m.dlg = noDialog
 		}
-	case renameDialog:
+	case mkdirDialog:
 		open := true
+		ui.Modal(c, &open, "新建文件夹", func() {
+			ui.Column(c).Gap(10).Children(func() {
+				ui.Text(c, "新建于 "+m.folderOf(m.target)).Muted()
+				ui.TextField(c, &m.name, "文件夹名", "新建文件夹").AutoFocus().FillWidth()
+			})
+		}, func() {
+			if ui.Button(c, "取消").Outline().Clicked() {
+				m.dlg = noDialog
+			}
+			if ui.Button(c, "创建").Clicked() {
+				m.createFolder()
+			}
+		})
+		if !open {
+			m.dlg = noDialog
+		}
+	case renameDialog:		open := true
 		ui.Modal(c, &open, "重命名", func() {
 			ui.Column(c).Gap(10).Children(func() {
 				ui.Text(c, m.target).Muted().Ellipsis()
@@ -457,6 +542,11 @@ func (m *model) watchClose() {
 
 // wake applies what the directory watch gathered, on the window thread.
 func (m *model) wake() {
+	select {
+	case <-m.autoCh:
+		m.autoSave()
+	default:
+	}
 	if m.watch == nil {
 		return
 	}
@@ -505,6 +595,9 @@ func (m *model) rebuild() {
 }
 
 func (m *model) openFile(path string) {
+	if path != m.path {
+		m.flushAutoSave()
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		m.toaster.Show("无法打开", err.Error(), ui.ToastError)
@@ -525,6 +618,7 @@ func (m *model) save() {
 		return
 	}
 	m.saved = m.text
+	m.autoDone = false
 	m.toaster.Show("已保存", filepath.Base(m.path), ui.ToastSuccess)
 }
 
@@ -564,6 +658,150 @@ func (m *model) createFile() {
 	m.rescan()
 	m.openFile(path)
 	m.toaster.Show("已创建", name, ui.ToastSuccess)
+}
+
+func (m *model) beginNewFolder(dir string) {
+	if m.root == "" {
+		return
+	}
+	if dir == "" {
+		dir = m.root
+	}
+	m.target = dir
+	m.name = "新建文件夹"
+	m.dlg = mkdirDialog
+}
+
+func (m *model) createFolder() {
+	name := strings.TrimSpace(m.name)
+	if name == "" {
+		return
+	}
+	path := filepath.Join(m.target, name)
+	m.dlg = noDialog
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		m.toaster.Show("创建失败", err.Error(), ui.ToastError)
+		return
+	}
+	m.sel = path
+	m.rescan()
+	m.toaster.Show("已创建文件夹", name, ui.ToastSuccess)
+}
+
+// importWord reads a Word document and writes the Markdown beside it, then opens
+// the note.
+func (m *model) importWord() {
+	paths, err := app.OpenFiles(app.OpenFileOptions{
+		Title:   "导入 Word 文档",
+		Filters: []app.FileFilter{{Name: "Word 文档", Pattern: "*.docx"}},
+	})
+	if err != nil || len(paths) == 0 {
+		return
+	}
+	src := paths[0]
+	text, err := readDocx(src)
+	if err != nil {
+		m.toaster.Show("导入失败", err.Error(), ui.ToastError)
+		return
+	}
+	dst := strings.TrimSuffix(src, filepath.Ext(src)) + ".md"
+	if err := os.WriteFile(dst, []byte(text), 0o644); err != nil {
+		m.toaster.Show("导入失败", err.Error(), ui.ToastError)
+		return
+	}
+	m.rescan()
+	m.openFile(dst)
+	m.toaster.Show("已导入 Word", filepath.Base(dst), ui.ToastSuccess)
+}
+
+// exportAs writes the open note in another format. An empty format asks for a
+// Word document, the first the export menu offers.
+func (m *model) exportAs(format string) {
+	if m.path == "" {
+		return
+	}
+	base := strings.TrimSuffix(filepath.Base(m.path), filepath.Ext(m.path))
+	if format == "" {
+		format = "docx"
+	}
+	options := app.SaveFileOptions{Title: "导出", SuggestedName: base + "." + format}
+	switch format {
+	case "html":
+		options.Filters = []app.FileFilter{{Name: "HTML 网页", Pattern: "*.html"}}
+	case "txt":
+		options.Filters = []app.FileFilter{{Name: "纯文本", Pattern: "*.txt"}}
+	default:
+		options.Filters = []app.FileFilter{{Name: "Word 文档", Pattern: "*.docx"}}
+	}
+	path, err := app.SaveFile(options)
+	if err != nil || path == "" {
+		return
+	}
+	var werr error
+	switch format {
+	case "html":
+		werr = writeHTML(path, m.text)
+	case "txt":
+		werr = writeText(path, m.text)
+	default:
+		werr = writeDocx(path, m.text)
+	}
+	if werr != nil {
+		m.toaster.Show("导出失败", werr.Error(), ui.ToastError)
+		return
+	}
+	m.toaster.Show("已导出", filepath.Base(path), ui.ToastSuccess)
+}
+
+// autoDelay is how long the editor waits after the last keystroke before it
+// writes the note.
+const autoDelay = 1200 * time.Millisecond
+
+// autoArm starts the auto-save timer when the note has changed since it was last
+// written and auto-save is on.
+func (m *model) autoArm() {
+	if !m.autoOn || m.path == "" || m.text == m.saved || m.text == m.autoText {
+		return
+	}
+	m.autoText = m.text
+	m.autoDone = false
+	if m.timer != nil {
+		m.timer.Stop()
+	}
+	m.timer = time.AfterFunc(autoDelay, func() {
+		select {
+		case m.autoCh <- struct{}{}:
+		default:
+		}
+		m.invalidator.Invalidate()
+	})
+}
+
+// autoSave writes the note when the auto-save timer fires, on the window thread.
+func (m *model) autoSave() {
+	m.timer = nil
+	if !m.autoOn || m.path == "" || m.text == m.saved {
+		return
+	}
+	if err := writeFileAtomic(m.path, m.text); err != nil {
+		return
+	}
+	m.saved = m.text
+	m.autoDone = true
+}
+
+// flushAutoSave writes unsaved work before the window moves to another note.
+func (m *model) flushAutoSave() {
+	if m.timer != nil {
+		m.timer.Stop()
+		m.timer = nil
+	}
+	if !m.autoOn || m.path == "" || m.text == m.saved {
+		return
+	}
+	if err := writeFileAtomic(m.path, m.text); err == nil {
+		m.saved = m.text
+	}
 }
 
 func (m *model) beginRename() {
@@ -635,6 +873,10 @@ func replacePrefix(path, old, updated string) string {
 
 func (m *model) close() {
 	m.watchClose()
+	if m.timer != nil {
+		m.timer.Stop()
+		m.timer = nil
+	}
 }
 
 func config(m *model) app.Config {

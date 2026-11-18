@@ -1,9 +1,10 @@
 [app]
 name = "MDNote"
 id = "dev.mdnote.app"
-version = "0.1.0"
+version = "0.2.0"
 executable = "mdnote"
 package = "."
+icon = "icon.png"
 
 [[app.file_types]]
 name = "Markdown 笔记"
