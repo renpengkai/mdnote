@@ -290,21 +290,19 @@ func (m *model) workspace(c ui.C) {
 			})
 			return
 		}
-		if m.lang != "" {
-			// A source file is read-only: the whole pane is its highlighted code.
-			ui.Column(c).Grow(1).FillHeight().Background(m.theme.Card).Children(func() {
-				if m.lang == "json" {
-					m.jsonBar(c)
-				}
-				m.preview(c, pane)
-			})
-			return
+		// Notes and source files share the same 编辑 / 分栏 / 预览 flow: the
+		// editor writes the file, the preview highlights Markdown or the
+		// source language. JSON keeps a format strip above the panes.
+		if m.lang == "json" {
+			m.jsonBar(c)
 		}
 		switch m.mode {
 		case editOnly:
 			m.editor(c)
 		case previewOnly:
-			m.preview(c, pane)
+			ui.Column(c).Grow(1).FillHeight().Background(m.theme.Card).Children(func() {
+				m.preview(c, pane)
+			})
 		default:
 			half := (pane - 1) / 2
 			ui.Row(c).Fill().Grow(1).Children(func() {
@@ -339,7 +337,11 @@ func (m *model) modeSwitcher(c ui.C) {
 }
 
 func (m *model) editor(c ui.C) {
-	ui.TextArea(c, &m.text, "Markdown 源码", "在这里写 Markdown…").Grow(1).FillWidth()
+	label, hint := "Markdown 源码", "在这里写 Markdown…"
+	if m.lang != "" {
+		label, hint = "源码", "编辑源码…"
+	}
+	ui.TextArea(c, &m.text, label, hint).Grow(1).FillWidth()
 }
 
 // jsonBar is the strip above a JSON preview: 格式化 pretty-prints the file.

@@ -402,7 +402,7 @@ func TestTreeListsJavaProject(t *testing.T) {
 	}
 }
 
-func TestOpenJavaFileShowsHighlightedPreview(t *testing.T) {
+func TestOpenJavaFileIsEditable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "App.java")
 	writeNote(t, path, "public class App {}\n")
@@ -418,13 +418,21 @@ func TestOpenJavaFileShowsHighlightedPreview(t *testing.T) {
 	if m.lang != "java" {
 		t.Fatalf("the opened file has language %q, want java", m.lang)
 	}
-	// A source file is read-only: no editor is declared, so the mode switcher
-	// and the text area are absent and the whole pane is the highlighted code.
-	if enabled(driver, "编辑") {
-		t.Fatal("a source file still offers the 编辑 mode")
+	// Source files use the same editor + highlighted preview as notes.
+	if !enabled(driver, "编辑") {
+		t.Fatal("a source file does not offer the 编辑 mode")
 	}
-	if enabled(driver, "Markdown 源码") {
-		t.Fatal("a source file still shows the editor")
+	if !enabled(driver, "源码") {
+		t.Fatal("a source file does not show the editor")
+	}
+	m.text = "public class App { int x = 1; }\n"
+	m.save()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != m.text {
+		t.Fatalf("saving a Java file wrote %q, want %q", got, m.text)
 	}
 }
 

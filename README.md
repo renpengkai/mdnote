@@ -11,8 +11,8 @@ Markdown 笔记应用。界面与交互参考 [motty](https://github.com/t8y2/mo
 
 | 平台 | 文件 |
 | --- | --- |
-| macOS · Apple Silicon（M 系列） | `mdnote-0.3.0-darwin-arm64.zip` |
-| macOS · Intel | `mdnote-0.3.0-darwin-amd64.zip` |
+| macOS · Apple Silicon（M 系列） | `mdnote-0.3.1-darwin-arm64.zip` |
+| macOS · Intel | `mdnote-0.3.1-darwin-amd64.zip` |
 | Windows x64 | `mdnote.exe` |
 | Linux x64 | `mdnote` |
 
@@ -39,12 +39,12 @@ xattr -dr com.apple.quarantine MDNote.app
 ## 功能
 
 - **文件夹 + 文件树**：打开一个文件夹，左侧列出其中的 Markdown/文本文件与源码文件（文件夹优先、按名排序，可折叠）。
-- **打开 Java 项目**：文件树识别 `.java` / `.kt` / `.xml` / `.json` / `.go` / `.py` 等源码文件，
-  直接打开一个 Java / Maven / Web 项目也能浏览并高亮阅读（源码文件以只读高亮预览呈现）。
+- **打开并编辑 Java / 源码项目**：文件树识别 `.java` / `.kt` / `.xml` / `.json` / `.go` / `.py` 等源码文件，
+  可直接打开项目；源码与笔记一样支持 **编辑 / 分栏 / 预览**，可改、可保存、可自动保存，右侧预览带语法高亮。
 - **新建文件 / 新建文件夹**：放在**左侧文件树顶部**，作用于选中的文件夹（未选中则作用于根目录）；「打开文件夹」只保留在顶部工具栏，不再与侧栏重复。
-- **JSON 格式化**：打开 `.json` 文件时预览上方提供「格式化」，一键美化缩进；改动后可「保存」写回。
+- **JSON 格式化**：打开 `.json` 文件时顶部提供「格式化」，一键美化缩进；改动后可「保存」写回。
 - **三种视图**：`编辑`（纯源码）/ `分栏`（左源码右预览）/ `预览`（纯渲染）。
-  打开笔记默认进入**分栏**，代码高亮一眼可见；切换控件缩小后浮在**右下角**，不占工具栏空间。
+  打开文件默认进入**分栏**，代码高亮一眼可见；切换控件缩小后浮在**右下角**，不占工具栏空间。
 - **Markdown 渲染**：标题、粗体、斜体、删除线、行内代码、链接、图片、列表、引用、代码块、表格、分隔线。
 - **代码高亮**：内置轻量高亮器，覆盖 **Java**（以及 Kotlin/Go/C/C++/C#/JS/TS/Rust/Swift/PHP/CSS/SQL 等 C 系语言）、
   **XML**（含 HTML / SVG / XAML / Maven POM）、**JSON**（含 JSONC / JSON5），随明暗主题配色。
@@ -94,7 +94,7 @@ Windows 可执行文件的图标与版本信息由仓库里的 `rsrc_windows_amd
 go install github.com/tc-hib/go-winres@latest
 go-winres simply --arch amd64 --manifest none --out rsrc --icon icon.png \
   --product-name MDNote --file-description "MDNote — 极简 Markdown 笔记应用" \
-  --product-version 0.3.0.0 --file-version 0.3.0.0
+  --product-version 0.3.1.0 --file-version 0.3.1.0
 ```
 
 ## 编译 macOS 版本
