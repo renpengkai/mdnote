@@ -221,10 +221,11 @@ func TestAutoSaveWritesTheNote(t *testing.T) {
 	if m.timer == nil {
 		t.Fatal("auto-save did not arm a timer")
 	}
+	// The timer would send to autoCh and invalidate the window; Paint forces
+	// the wake and the repaint without waiting out the delay.
 	m.timer.Stop()
 	m.autoCh <- struct{}{}
-	m.wake()
-	if err := driver.Pump(); err != nil {
+	if err := driver.Paint(); err != nil {
 		t.Fatal(err)
 	}
 
