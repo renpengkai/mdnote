@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
@@ -42,13 +43,14 @@ const (
 
 // entry is one row of the file tree: a folder or a note.
 type entry struct {
-	name  string
-	path  string
-	dir   bool
-	depth int
-	open  bool
-	key   int
-	kids  []*entry
+	name    string
+	path    string
+	dir     bool
+	depth   int
+	open    bool
+	key     int
+	kids    []*entry
+	scanned bool // dir contents loaded; kids stay nil until the folder opens
 }
 
 // model is everything the window shows. page only reads it; a click handled
@@ -99,6 +101,8 @@ type model struct {
 	autoText string
 	autoDone bool
 	timer    *time.Timer
+
+	treeKey int // monotonic key for tree rows across lazy folder loads
 
 	// Method values made once: a method value made in a paint allocates.
 	label   func(int) string
@@ -263,6 +267,9 @@ func (m *model) sidebar(c ui.C) {
 		if i, ok := m.tree.Toggled(); ok {
 			e := m.visible[i]
 			e.open = !e.open
+			if e.open {
+				loadKids(e, &m.treeKey)
+			}
 			c.After(m.flatten)
 		}
 		if i, ok := m.tree.Chosen(); ok {
@@ -286,6 +293,9 @@ func (m *model) workspace(c ui.C) {
 		if m.lang != "" {
 			// A source file is read-only: the whole pane is its highlighted code.
 			ui.Column(c).Grow(1).FillHeight().Background(m.theme.Card).Children(func() {
+				if m.lang == "json" {
+					m.jsonBar(c)
+				}
 				m.preview(c, pane)
 			})
 			return
@@ -319,10 +329,6 @@ func (m *model) sidebarActions(c ui.C) {
 		if ui.Button(c, "新建文件夹").Outline().Small().Clicked() {
 			m.beginNewFolder(m.folderOf(m.sel))
 		}
-		ui.Spacer(c)
-		if ui.Button(c, "打开文件夹").Outline().Small().Clicked() {
-			m.openFolder()
-		}
 	})
 }
 
@@ -334,6 +340,48 @@ func (m *model) modeSwitcher(c ui.C) {
 
 func (m *model) editor(c ui.C) {
 	ui.TextArea(c, &m.text, "Markdown 源码", "在这里写 Markdown…").Grow(1).FillWidth()
+}
+
+// jsonBar is the strip above a JSON preview: 格式化 pretty-prints the file.
+func (m *model) jsonBar(c ui.C) {
+	ui.Row(c).FillWidth().Pad(8).Gap(8).Items(ui.Center).Children(func() {
+		ui.Text(c, filepath.Base(m.path)).Muted().Ellipsis()
+		ui.Spacer(c)
+		if ui.Button(c, "格式化").Outline().Small().Clicked() {
+			m.formatJSON()
+		}
+	})
+	ui.Divider(c)
+}
+
+// formatJSON pretty-prints the open JSON file in place. Save writes it back.
+func (m *model) formatJSON() {
+	formatted, err := prettyJSON(m.text)
+	if err != nil {
+		m.toaster.Show("格式化失败", err.Error(), ui.ToastError)
+		return
+	}
+	if formatted == m.text {
+		m.toaster.Show("已经是格式化内容", filepath.Base(m.path), ui.ToastInfo)
+		return
+	}
+	m.text = formatted
+	m.mdWidth = -1
+	m.toaster.Show("已格式化", filepath.Base(m.path), ui.ToastSuccess)
+}
+
+// prettyJSON returns text with standard JSON indentation, or an error when the
+// text is not valid JSON.
+func prettyJSON(text string) (string, error) {
+	var v any
+	if err := json.Unmarshal([]byte(text), &v); err != nil {
+		return "", err
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b) + "\n", nil
 }
 
 func (m *model) preview(c ui.C, width float32) {
@@ -533,6 +581,9 @@ func (m *model) choose(i int) {
 	m.sel = e.path
 	if e.dir {
 		e.open = !e.open
+		if e.open {
+			loadKids(e, &m.treeKey)
+		}
 		m.flatten()
 		return
 	}
@@ -621,9 +672,10 @@ func (m *model) rescan() {
 		}
 	}
 	collect(m.roots)
-	budget, key := 4000, 0
-	m.roots = scanDir(m.root, 0, &budget, &key)
+	m.treeKey = 0
+	m.roots = scanDir(m.root, 0, &m.treeKey)
 	restoreOpen(m.roots, open)
+	ensureOpenKids(m.roots, &m.treeKey)
 	m.rebuild()
 }
 

@@ -9,3 +9,4 @@
 # 临时文件
 *.out
 *.log
+.tools/

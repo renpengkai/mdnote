@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -385,8 +386,8 @@ func TestTreeListsJavaProject(t *testing.T) {
 	writeNote(t, filepath.Join(dir, "package.json"), "{}\n")
 	writeNote(t, filepath.Join(dir, "logo.png"), "x")
 
-	budget, key := 4000, 0
-	rows := scanDir(dir, 0, &budget, &key)
+	key := 0
+	rows := scanDir(dir, 0, &key)
 	var names []string
 	for _, e := range rows {
 		names = append(names, e.name)
@@ -395,6 +396,7 @@ func TestTreeListsJavaProject(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("scanDir listed %v, want %v", names, want)
 	}
+	loadKids(rows[0], &key)
 	if len(rows[0].kids) != 1 || rows[0].kids[0].name != "main" {
 		t.Fatalf("the src folder holds %v", rows[0].kids)
 	}
@@ -423,5 +425,83 @@ func TestOpenJavaFileShowsHighlightedPreview(t *testing.T) {
 	}
 	if enabled(driver, "Markdown 源码") {
 		t.Fatal("a source file still shows the editor")
+	}
+}
+
+func TestTreeKeepsSiblingsWhenFirstFolderIsHuge(t *testing.T) {
+	dir := t.TempDir()
+	assets := filepath.Join(dir, "assets")
+	backend := filepath.Join(dir, "backend")
+	if err := os.MkdirAll(filepath.Join(backend, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(assets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		writeNote(t, filepath.Join(backend, "nested", "f"+strconv.Itoa(i)+".go"), "package n\n")
+	}
+	writeNote(t, filepath.Join(dir, "readme.md"), "# hi\n")
+	writeNote(t, filepath.Join(dir, "manifest.json"), "{}\n")
+
+	m := newModel()
+	m.setRoot(dir)
+	var names []string
+	for _, e := range m.roots {
+		names = append(names, e.name)
+	}
+	want := []string{"assets", "backend", "manifest.json", "readme.md"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("root listed %v, want %v", names, want)
+	}
+}
+
+func TestFormatJSON(t *testing.T) {
+	got, err := prettyJSON(`{"b":1,"a":[2,3]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// encoding/json sorts map keys, so "a" precedes "b".
+	want := "{\n  \"a\": [\n    2,\n    3\n  ],\n  \"b\": 1\n}\n"
+	if got != want {
+		t.Fatalf("prettyJSON = %q, want %q", got, want)
+	}
+	if _, err := prettyJSON("{"); err == nil {
+		t.Fatal("prettyJSON accepted invalid JSON")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "store.json")
+	writeNote(t, path, `{"z":1,"y":2}`)
+	m := newModel()
+	m.setRoot(dir)
+	driver := open(t, m)
+	click(t, driver, "store.json")
+	if !enabled(driver, "格式化") {
+		t.Fatal("a JSON file has no 格式化 button")
+	}
+	click(t, driver, "格式化")
+	if !strings.Contains(m.text, "\n  \"z\": 1") {
+		t.Fatalf("格式化 left the text as %q", m.text)
+	}
+	if m.text == m.saved {
+		t.Fatal("格式化 should mark the file unsaved")
+	}
+}
+
+func TestSidebarHasNoDuplicateOpenFolder(t *testing.T) {
+	dir := t.TempDir()
+	m := newModel()
+	m.setRoot(dir)
+	driver := open(t, m)
+	// Toolbar keeps 打开文件夹; the tree action row must not repeat it.
+	n := 0
+	for _, hit := range driver.Snapshot().Hits {
+		if hit.Label == "打开文件夹" && !hit.IsLabel {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("打开文件夹 appeared %d times, want 1", n)
 	}
 }

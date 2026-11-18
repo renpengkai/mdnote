@@ -112,11 +112,16 @@ func skipName(name string) bool {
 	return false
 }
 
-// scanDir lists dir as tree rows: folders first, then notes, each group sorted
-// by name. It recurses into folders, and budget caps the total rows so a huge
-// tree cannot make the window hang; key numbers the rows so a row keeps its
-// focus as folders open and close above it.
-func scanDir(dir string, depth int, budget, key *int) []*entry {
+// maxDirEntries caps how many rows one folder contributes, so a single huge
+// directory cannot stall the window. Siblings of other folders are unaffected
+// because scanDir no longer walks the whole tree up front.
+const maxDirEntries = 8000
+
+// scanDir lists one directory as tree rows: folders first, then notes and
+// source files, each group sorted by name. It does not recurse; loadKids fills
+// a folder when the user opens it, so a deep tree cannot hide later siblings
+// by spending a shared row budget inside the first folders.
+func scanDir(dir string, depth int, key *int) []*entry {
 	items, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -141,20 +146,34 @@ func scanDir(dir string, depth int, budget, key *int) []*entry {
 		}
 		return strings.ToLower(a.name) < strings.ToLower(b.name)
 	})
-	out := rows[:0]
+	if len(rows) > maxDirEntries {
+		rows = rows[:maxDirEntries]
+	}
 	for _, e := range rows {
-		if *budget <= 0 {
-			break
-		}
-		*budget--
 		*key++
 		e.key = *key
-		if e.dir {
-			e.kids = scanDir(e.path, depth+1, budget, key)
-		}
-		out = append(out, e)
 	}
-	return out
+	return rows
+}
+
+// loadKids reads e's directory into kids the first time the folder is opened.
+func loadKids(e *entry, key *int) {
+	if e == nil || !e.dir || e.scanned {
+		return
+	}
+	e.kids = scanDir(e.path, e.depth+1, key)
+	e.scanned = true
+}
+
+// ensureOpenKids loads children for every folder marked open, and recurses so
+// a rescan keeps nested open folders filled.
+func ensureOpenKids(list []*entry, key *int) {
+	for _, e := range list {
+		if e.dir && e.open {
+			loadKids(e, key)
+			ensureOpenKids(e.kids, key)
+		}
+	}
 }
 
 // restoreOpen reapplies the open flags gathered before a rescan, so a directory

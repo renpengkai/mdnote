@@ -170,8 +170,8 @@ func TestScanDirFiltersAndOrders(t *testing.T) {
 	writeNote(t, filepath.Join(dir, "sub", "c.md"), "c")
 	writeNote(t, filepath.Join(dir, ".hidden", "secret.md"), "s")
 
-	budget, key := 4000, 0
-	rows := scanDir(dir, 0, &budget, &key)
+	key := 0
+	rows := scanDir(dir, 0, &key)
 
 	var names []string
 	for _, e := range rows {
@@ -181,6 +181,10 @@ func TestScanDirFiltersAndOrders(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("scanDir listed %v, want %v", names, want)
 	}
+	if rows[0].scanned || rows[0].kids != nil {
+		t.Fatal("scanDir must not load folder children until the folder opens")
+	}
+	loadKids(rows[0], &key)
 	if len(rows[0].kids) != 1 || rows[0].kids[0].name != "c.md" {
 		t.Fatalf("the subfolder holds %v", rows[0].kids)
 	}
