@@ -1,0 +1,18 @@
+[app]
+name = "MDNote"
+id = "dev.mdnote.app"
+version = "0.1.0"
+executable = "mdnote"
+package = "."
+
+[[app.file_types]]
+name = "Markdown 笔记"
+extensions = ["md", "markdown", "mdown", "mkd", "mdx", "txt"]
+mime = "text/markdown"
+uti = "net.daringfireball.markdown"
+
+[mac]
+# 编译目标与 LSMinimumSystemVersion；Go 1.26 支持的最低 macOS 为 12.0。
+min_system = "12.0"
+category = "public.app-category.productivity"
+copyright = "Copyright © 2026 MDNote"

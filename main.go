@@ -1,0 +1,670 @@
+// Command mdnote is a small Markdown notes application: a folder of notes on
+// the left, an editor and a live preview on the right. It is drawn on the GPU
+// by Viva, with no web view, so the program and its window stay small.
+package main
+
+import (
+	"log"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/vivaui/viva/app"
+	"github.com/vivaui/viva/components"
+	"github.com/vivaui/viva/gfx"
+	"github.com/vivaui/viva/markdown"
+	"github.com/vivaui/viva/ui"
+)
+
+// mode is which panes of a note the window shows.
+type mode int
+
+const (
+	editOnly mode = iota
+	splitView
+	previewOnly
+)
+
+// dialog is the modal the window is showing, if any.
+type dialog int
+
+const (
+	noDialog dialog = iota
+	newDialog
+	renameDialog
+	deleteDialog
+)
+
+// entry is one row of the file tree: a folder or a note.
+type entry struct {
+	name  string
+	path  string
+	dir   bool
+	depth int
+	open  bool
+	key   int
+	kids  []*entry
+}
+
+// model is everything the window shows. page only reads it; a click handled
+// where its control is declared is the only place that changes it.
+type model struct {
+	theme gfx.Theme
+	dark  bool
+
+	root    string
+	roots   []*entry
+	visible []*entry
+	tree    ui.TreeState
+	sel     string
+	split   ui.SplitterState
+	mode    mode
+	modes   []mode
+
+	path  string
+	text  string
+	saved string
+
+	doc     markdown.Document
+	view    components.MarkdownView
+	mdText  string
+	mdWidth float32
+	mdH     float32
+
+	statsText  string
+	statsCache string
+
+	toaster     ui.Toaster
+	invalidator app.Invalidator
+	watch       *app.DirectoryWatch
+	changes     []string
+
+	menu   bool
+	dlg    dialog
+	name   string
+	target string
+
+	// Method values made once: a method value made in a paint allocates.
+	label   func(int) string
+	nodeAt  func(int) ui.TreeNode
+	keyAt   func(int) int
+	modeOf  func(mode) string
+	paint   func(*ui.DrawContext)
+	flatten func()
+}
+
+func newModel() *model {
+	m := &model{
+		theme: gfx.LightTheme(),
+		modes: []mode{editOnly, splitView, previewOnly},
+		split: ui.SplitterState{Pos: 260},
+	}
+	m.label = m.rowLabel
+	m.nodeAt = m.rowNode
+	m.keyAt = m.rowKey
+	m.modeOf = m.modeName
+	m.paint = m.paintPreview
+	m.flatten = m.rebuild
+	m.tree.Node = m.nodeAt
+	m.tree.Key = m.keyAt
+	return m
+}
+
+// page declares the window. It runs again on every repaint, from the model.
+func (m *model) page(c ui.C) {
+	if ui.Shortcut(c, ui.Primary, "s") {
+		m.save()
+	}
+	if ui.Shortcut(c, ui.Primary, "o") {
+		m.openFolder()
+	}
+	if ui.Shortcut(c, ui.Primary, "n") {
+		m.beginNew("")
+	}
+
+	ui.Column(c).Fill().Children(func() {
+		m.toolbar(c)
+		ui.Divider(c)
+		ui.Row(c).Fill().Grow(1).Children(func() {
+			m.sidebar(c)
+			ui.Splitter(c, &m.split).Mins(150, 260)
+			m.workspace(c)
+		})
+		ui.Divider(c)
+		m.statusbar(c)
+	})
+	m.modals(c)
+	ui.Toasts(c, &m.toaster)
+}
+
+func (m *model) toolbar(c ui.C) {
+	ui.Row(c).FillWidth().Pad(8).Gap(8).Items(ui.Center).Children(func() {
+		if ui.Button(c, "打开文件夹").Outline().Clicked() {
+			m.openFolder()
+		}
+		if ui.Button(c, "新建笔记").Outline().Disabled(m.root == "").Clicked() {
+			m.beginNew("")
+		}
+		save := ui.Button(c, "保存").Disabled(m.path == "" || m.text == m.saved)
+		if save.Clicked() {
+			m.save()
+		}
+		ui.Spacer(c)
+		ui.Tabs(c, &m.mode, m.modes, m.modeOf)
+		ui.Spacer(c)
+		m.moreMenu(c)
+		if ui.Button(c, m.themeLabel()).Outline().Clicked() {
+			m.toggleTheme()
+		}
+	})
+}
+
+func (m *model) moreMenu(c ui.C) {
+	anchor := ui.Button(c, "更多").Outline()
+	if anchor.Clicked() {
+		m.menu = !m.menu
+	}
+	ui.Menu(c, anchor, &m.menu, func(menu *ui.MenuItems) {
+		if menu.Item("新建文件").Disabled(m.root == "").Clicked() {
+			m.beginNew(m.folderOf(m.sel))
+		}
+		if menu.Item("重命名").Disabled(m.sel == "").Clicked() {
+			m.beginRename()
+		}
+		if menu.Item("删除").Destructive().Disabled(m.sel == "").Clicked() {
+			m.beginDelete()
+		}
+		menu.Separator()
+		if menu.Item("在文件管理器中显示").Disabled(m.sel == "").Clicked() {
+			app.RevealPath(m.sel)
+		}
+		if menu.Item("重新扫描").Disabled(m.root == "").Clicked() {
+			m.rescan()
+		}
+	})
+}
+
+func (m *model) sidebar(c ui.C) {
+	ui.Column(c).Width(m.split.Pos).FillHeight().Background(m.theme.Muted).Children(func() {
+		if m.root == "" {
+			ui.Column(c).Pad(16).Gap(10).Children(func() {
+				ui.Text(c, "还没有打开文件夹").Muted()
+				if ui.Button(c, "打开文件夹").Clicked() {
+					m.openFolder()
+				}
+			})
+			return
+		}
+		ui.Tree(c, &m.tree, len(m.visible), m.label, nil).Grow(1)
+		if i, ok := m.tree.Toggled(); ok {
+			e := m.visible[i]
+			e.open = !e.open
+			c.After(m.flatten)
+		}
+		if i, ok := m.tree.Chosen(); ok {
+			m.choose(i)
+		}
+	})
+}
+
+func (m *model) workspace(c ui.C) {
+	pane := c.Bounds().Width - m.split.Pos - 8
+	if pane < 0 {
+		pane = 0
+	}
+	ui.Column(c).Grow(1).FillHeight().Children(func() {
+		if m.path == "" {
+			ui.Column(c).Fill().Pad(24).Gap(10).Items(ui.Center).Justify(ui.Center).Children(func() {
+				ui.Text(c, "选择左侧的笔记，或新建一篇").Muted()
+			})
+			return
+		}
+		switch m.mode {
+		case editOnly:
+			m.editor(c)
+		case previewOnly:
+			m.preview(c, pane)
+		default:
+			half := (pane - 1) / 2
+			ui.Row(c).Fill().Grow(1).Children(func() {
+				ui.Column(c).Width(half).FillHeight().Children(func() { m.editor(c) })
+				ui.Divider(c)
+				ui.Column(c).Grow(1).FillHeight().Background(m.theme.Card).Children(func() {
+					m.preview(c, pane-1-half)
+				})
+			})
+		}
+	})
+}
+
+func (m *model) editor(c ui.C) {
+	ui.TextArea(c, &m.text, "Markdown 源码", "在这里写 Markdown…").Grow(1).FillWidth()
+}
+
+func (m *model) preview(c ui.C, width float32) {
+	ui.Scroll(c).Grow(1).FillWidth().Pad(16).Scrollbars().Children(func() {
+		m.layoutPreview(c.Canvas(), width-32)
+		ui.Slot(c).FillWidth().Height(m.mdH).Draw(m.paint)
+	})
+}
+
+// paintPreview paints the laid-out document into the slot it was declared in.
+func (m *model) paintPreview(d *ui.DrawContext) {
+	m.view.Paint(d.Canvas, components.MarkdownPaint{
+		Look: components.MarkdownLookFor(m.theme),
+		X:    d.Rect.X,
+		Y:    d.Rect.Y,
+	})
+}
+
+// layoutPreview parses and measures the note, but only when the text or the
+// width changed: Layout is the expensive half of the preview.
+func (m *model) layoutPreview(canvas *gfx.Canvas, width float32) {
+	if width <= 0 || (m.mdText == m.text && m.mdWidth == width) {
+		return
+	}
+	m.doc.Parse(m.text)
+	m.mdText, m.mdWidth = m.text, width
+	m.mdH = m.view.Layout(canvas, components.MarkdownStyle{
+		Size:       m.theme.Metrics.FontSizeM,
+		LineHeight: 22,
+		CodeInset:  28,
+	}, &m.doc, width)
+}
+
+func (m *model) statusbar(c ui.C) {
+	ui.Row(c).FillWidth().Pad(8).Gap(12).Items(ui.Center).Children(func() {
+		label := "未打开文件"
+		if m.path != "" {
+			label = m.path
+		}
+		ui.Text(c, label).Muted().Ellipsis()
+		ui.Spacer(c)
+		if m.path != "" && m.text != m.saved {
+			ui.Text(c, "未保存").Color(m.theme.Danger)
+		}
+		ui.Text(c, m.stats()).Muted()
+	})
+}
+
+func (m *model) modals(c ui.C) {
+	switch m.dlg {
+	case newDialog:
+		open := true
+		ui.Modal(c, &open, "新建笔记", func() {
+			ui.Column(c).Gap(10).Children(func() {
+				ui.Text(c, "新建于 "+m.folderOf(m.target)).Muted()
+				ui.TextField(c, &m.name, "文件名", "笔记.md").AutoFocus().FillWidth()
+			})
+		}, func() {
+			if ui.Button(c, "取消").Outline().Clicked() {
+				m.dlg = noDialog
+			}
+			if ui.Button(c, "创建").Clicked() {
+				m.createFile()
+			}
+		})
+		if !open {
+			m.dlg = noDialog
+		}
+	case renameDialog:
+		open := true
+		ui.Modal(c, &open, "重命名", func() {
+			ui.Column(c).Gap(10).Children(func() {
+				ui.Text(c, m.target).Muted().Ellipsis()
+				ui.TextField(c, &m.name, "新名称", "").AutoFocus().FillWidth()
+			})
+		}, func() {
+			if ui.Button(c, "取消").Outline().Clicked() {
+				m.dlg = noDialog
+			}
+			if ui.Button(c, "重命名").Clicked() {
+				m.rename()
+			}
+		})
+		if !open {
+			m.dlg = noDialog
+		}
+	case deleteDialog:
+		open := true
+		ui.Modal(c, &open, "删除", func() {
+			ui.Column(c).Gap(10).Children(func() {
+				ui.Text(c, "确定删除 "+m.target+" 吗？此操作无法撤销。")
+			})
+		}, func() {
+			if ui.Button(c, "取消").Outline().Clicked() {
+				m.dlg = noDialog
+			}
+			if ui.Button(c, "删除").Destructive().Clicked() {
+				m.deleteTarget()
+			}
+		})
+		if !open {
+			m.dlg = noDialog
+		}
+	}
+}
+
+func (m *model) themeLabel() string {
+	if m.dark {
+		return "浅色"
+	}
+	return "深色"
+}
+
+func (m *model) toggleTheme() {
+	m.dark = !m.dark
+	if m.dark {
+		m.theme = gfx.DarkTheme()
+	} else {
+		m.theme = gfx.LightTheme()
+	}
+}
+
+func (m *model) modeName(v mode) string {
+	switch v {
+	case editOnly:
+		return "编辑"
+	case previewOnly:
+		return "预览"
+	default:
+		return "分栏"
+	}
+}
+
+func (m *model) rowLabel(i int) string { return m.visible[i].name }
+
+func (m *model) rowKey(i int) int { return m.visible[i].key }
+
+func (m *model) rowNode(i int) ui.TreeNode {
+	e := m.visible[i]
+	return ui.TreeNode{
+		Depth:    e.depth,
+		Branch:   e.dir,
+		Expanded: e.open,
+		Selected: e.path == m.path,
+	}
+}
+
+// stats is the character and word count of the note, recomputed only when the
+// text changed.
+func (m *model) stats() string {
+	if m.text == m.statsText {
+		return m.statsCache
+	}
+	words, inWord := 0, false
+	for _, r := range m.text {
+		switch {
+		case unicode.IsSpace(r):
+			inWord = false
+		case !inWord:
+			words, inWord = words+1, true
+		}
+	}
+	m.statsText = m.text
+	m.statsCache = strconv.Itoa(utf8.RuneCountInString(m.text)) + " 字符 · " + strconv.Itoa(words) + " 词"
+	return m.statsCache
+}
+
+func (m *model) choose(i int) {
+	e := m.visible[i]
+	m.sel = e.path
+	if e.dir {
+		e.open = !e.open
+		m.flatten()
+		return
+	}
+	m.openFile(e.path)
+}
+
+func (m *model) folderOf(path string) string {
+	if path == "" {
+		return m.root
+	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return path
+	}
+	return filepath.Dir(path)
+}
+
+func (m *model) openFolder() {
+	dir, err := app.OpenDirectory(app.OpenDirectoryOptions{Title: "选择笔记文件夹"})
+	if err != nil || dir == "" {
+		return
+	}
+	m.setRoot(dir)
+}
+
+func (m *model) setRoot(dir string) {
+	m.root = dir
+	m.sel = ""
+	m.rescan()
+	m.watchClose()
+	if watch, err := app.WatchTree(dir, skipName, m.invalidator.Invalidate); err == nil {
+		m.watch = watch
+	}
+}
+
+func (m *model) watchClose() {
+	if m.watch != nil {
+		m.watch.Close()
+		m.watch = nil
+	}
+}
+
+// wake applies what the directory watch gathered, on the window thread.
+func (m *model) wake() {
+	if m.watch == nil {
+		return
+	}
+	ch := m.watch.Changes(m.changes[:0])
+	m.changes = ch.Names
+	if len(m.changes) > 0 || ch.Resync {
+		m.rescan()
+	}
+}
+
+func (m *model) rescan() {
+	if m.root == "" {
+		m.roots, m.visible = nil, nil
+		return
+	}
+	open := make(map[string]bool)
+	var collect func(list []*entry)
+	collect = func(list []*entry) {
+		for _, e := range list {
+			if e.dir && e.open {
+				open[e.path] = true
+			}
+			collect(e.kids)
+		}
+	}
+	collect(m.roots)
+	budget, key := 4000, 0
+	m.roots = scanDir(m.root, 0, &budget, &key)
+	restoreOpen(m.roots, open)
+	m.rebuild()
+}
+
+// rebuild flattens the tree into the rows the Tree shows.
+func (m *model) rebuild() {
+	m.visible = m.visible[:0]
+	var walk func(list []*entry)
+	walk = func(list []*entry) {
+		for _, e := range list {
+			m.visible = append(m.visible, e)
+			if e.dir && e.open {
+				walk(e.kids)
+			}
+		}
+	}
+	walk(m.roots)
+}
+
+func (m *model) openFile(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		m.toaster.Show("无法打开", err.Error(), ui.ToastError)
+		return
+	}
+	m.path = path
+	m.text = string(data)
+	m.saved = m.text
+	m.mdWidth = -1
+}
+
+func (m *model) save() {
+	if m.path == "" {
+		return
+	}
+	if err := writeFileAtomic(m.path, m.text); err != nil {
+		m.toaster.Show("保存失败", err.Error(), ui.ToastError)
+		return
+	}
+	m.saved = m.text
+	m.toaster.Show("已保存", filepath.Base(m.path), ui.ToastSuccess)
+}
+
+func (m *model) beginNew(dir string) {
+	if m.root == "" {
+		return
+	}
+	if dir == "" {
+		dir = m.root
+	}
+	m.target = dir
+	m.name = "新笔记.md"
+	m.dlg = newDialog
+}
+
+func (m *model) createFile() {
+	name := strings.TrimSpace(m.name)
+	if name == "" {
+		return
+	}
+	if filepath.Ext(name) == "" {
+		name += ".md"
+	}
+	path := filepath.Join(m.target, name)
+	m.dlg = noDialog
+	if _, err := os.Stat(path); err == nil {
+		m.toaster.Show("已存在", name, ui.ToastWarning)
+		m.rescan()
+		m.openFile(path)
+		return
+	}
+	title := strings.TrimSuffix(name, filepath.Ext(name))
+	if err := os.WriteFile(path, []byte("# "+title+"\n"), 0o644); err != nil {
+		m.toaster.Show("创建失败", err.Error(), ui.ToastError)
+		return
+	}
+	m.rescan()
+	m.openFile(path)
+	m.toaster.Show("已创建", name, ui.ToastSuccess)
+}
+
+func (m *model) beginRename() {
+	if m.sel == "" {
+		return
+	}
+	m.target = m.sel
+	m.name = filepath.Base(m.sel)
+	m.dlg = renameDialog
+}
+
+func (m *model) rename() {
+	name := strings.TrimSpace(m.name)
+	if name == "" || m.target == "" {
+		return
+	}
+	dst := filepath.Join(filepath.Dir(m.target), name)
+	if dst == m.target {
+		m.dlg = noDialog
+		return
+	}
+	if err := os.Rename(m.target, dst); err != nil {
+		m.toaster.Show("重命名失败", err.Error(), ui.ToastError)
+		return
+	}
+	m.path = replacePrefix(m.path, m.target, dst)
+	m.sel = dst
+	m.dlg = noDialog
+	m.rescan()
+	m.toaster.Show("已重命名", name, ui.ToastSuccess)
+}
+
+func (m *model) beginDelete() {
+	if m.sel == "" {
+		return
+	}
+	m.target = m.sel
+	m.dlg = deleteDialog
+}
+
+func (m *model) deleteTarget() {
+	target := m.target
+	if target == "" {
+		return
+	}
+	if err := os.RemoveAll(target); err != nil {
+		m.toaster.Show("删除失败", err.Error(), ui.ToastError)
+		return
+	}
+	if m.path == target || strings.HasPrefix(m.path, target+string(filepath.Separator)) {
+		m.path, m.text, m.saved = "", "", ""
+	}
+	m.sel, m.target, m.dlg = "", "", noDialog
+	m.rescan()
+	m.toaster.Show("已删除", filepath.Base(target), ui.ToastSuccess)
+}
+
+// replacePrefix is path with the old prefix swapped for the new one, when path
+// is the prefix itself or lies under it.
+func replacePrefix(path, old, updated string) string {
+	if path == old {
+		return updated
+	}
+	if strings.HasPrefix(path, old+string(filepath.Separator)) {
+		return updated + path[len(old):]
+	}
+	return path
+}
+
+func (m *model) close() {
+	m.watchClose()
+}
+
+func config(m *model) app.Config {
+	return app.Config{
+		Title:       "MDNote",
+		Width:       1120,
+		Height:      740,
+		MinWidth:    640,
+		MinHeight:   420,
+		Invalidator: &m.invalidator,
+		OnKey:       m.split.Key,
+		OnWake:      m.wake,
+		OnClosed:    m.close,
+	}
+}
+
+func main() {
+	m := newModel()
+	if len(os.Args) > 1 {
+		if info, err := os.Stat(os.Args[1]); err == nil {
+			if info.IsDir() {
+				m.setRoot(os.Args[1])
+			} else {
+				m.setRoot(filepath.Dir(os.Args[1]))
+				m.openFile(os.Args[1])
+			}
+		}
+	}
+	page := ui.NewPage(ui.PageConfig{View: m.page, Theme: &m.theme})
+	if err := app.RunCanvas(page.Config(config(m)), nil); err != nil {
+		log.Fatal(err)
+	}
+}

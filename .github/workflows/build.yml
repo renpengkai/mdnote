@@ -1,0 +1,86 @@
+# 在真实的 macOS runner 上编译 MDNote 的 Mac 版本。
+#
+# 为什么需要 CI：Viva 的 macOS 后端通过 cgo 调用 Cocoa / Metal（Objective-C），
+# 无法在 Windows / Linux 上交叉编译（viva 会直接报
+# "building for darwin needs a macOS host"）。所以 Mac 版必须在 macOS 上构建。
+#
+# 用法：把本目录作为仓库根目录推到 GitHub，Actions 会自动产出：
+#   mdnote-macos-arm64  （Apple Silicon，MDNote.app + zip）
+#   mdnote-macos-amd64  （Intel，MDNote.app + zip）
+#   mdnote-windows-amd64 / mdnote-linux-amd64
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14   # Apple Silicon
+            arch: arm64
+          - runner: macos-13   # Intel
+            arch: amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - name: Test
+        run: go test ./... -count=1
+      - name: Build the viva CLI
+        run: go build -o viva github.com/vivaui/viva/cmd/viva
+      - name: Package MDNote.app (+ zip)
+        run: ./viva package --target darwin --arch ${{ matrix.arch }} --format zip
+      - name: Show the result
+        run: ls -la build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mdnote-macos-${{ matrix.arch }}
+          path: build/**
+          if-no-files-found: error
+
+  windows:
+    name: Windows amd64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - name: Test
+        run: go test ./... -count=1
+      - name: Build
+        run: go build -trimpath -ldflags="-s -w -buildid=" -o mdnote.exe .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mdnote-windows-amd64
+          path: mdnote.exe
+
+  linux:
+    name: Linux amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - name: Test
+        run: go test ./... -count=1
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags="-s -w -buildid=" -o mdnote .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mdnote-linux-amd64
+          path: mdnote
