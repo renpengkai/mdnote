@@ -206,6 +206,29 @@ func TestNewFolderFromMenu(t *testing.T) {
 	}
 }
 
+func TestNewNoteWithoutFolderAsksForOne(t *testing.T) {
+	dir := t.TempDir()
+	m := newModel()
+	driver := open(t, m)
+
+	if !enabled(driver, "新建笔记") {
+		t.Fatal("新建笔记 is disabled before a folder is open")
+	}
+	if err := driver.QueueOpenDirectory(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	click(t, driver, "新建笔记")
+	click(t, driver, "创建")
+
+	created := filepath.Join(dir, "新笔记.md")
+	if _, err := os.Stat(created); err != nil {
+		t.Fatalf("the new note was not created: %v", err)
+	}
+	if m.root != dir {
+		t.Fatalf("the folder is %q, want %q", m.root, dir)
+	}
+}
+
 func TestAutoSaveWritesTheNote(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "note.md")

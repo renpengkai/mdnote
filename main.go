@@ -87,8 +87,8 @@ type model struct {
 	menu       bool
 	exportOpen bool
 	dlg        dialog
-	name   string
-	target string
+	name       string
+	target     string
 
 	// Auto-save: the editor arms a timer when the text changes and the timer
 	// wakes the window, which writes the note. autoOn turns it off.
@@ -159,7 +159,7 @@ func (m *model) toolbar(c ui.C) {
 		if ui.Button(c, "打开文件夹").Outline().Clicked() {
 			m.openFolder()
 		}
-		if ui.Button(c, "新建笔记").Outline().Disabled(m.root == "").Clicked() {
+		if ui.Button(c, "新建笔记").Outline().Clicked() {
 			m.beginNew("")
 		}
 		save := ui.Button(c, "保存").Disabled(m.path == "" || m.text == m.saved)
@@ -181,10 +181,10 @@ func (m *model) moreMenu(c ui.C) {
 		m.menu = !m.menu
 	}
 	ui.Menu(c, anchor, &m.menu, func(menu *ui.MenuItems) {
-		if menu.Item("新建文件").Disabled(m.root == "").Clicked() {
+		if menu.Item("新建文件").Clicked() {
 			m.beginNew(m.folderOf(m.sel))
 		}
-		if menu.Item("新建文件夹").Disabled(m.root == "").Clicked() {
+		if menu.Item("新建文件夹").Clicked() {
 			m.beginNewFolder(m.folderOf(m.sel))
 		}
 		if menu.Item("重命名").Disabled(m.sel == "").Clicked() {
@@ -396,7 +396,8 @@ func (m *model) modals(c ui.C) {
 		if !open {
 			m.dlg = noDialog
 		}
-	case renameDialog:		open := true
+	case renameDialog:
+		open := true
 		ui.Modal(c, &open, "重命名", func() {
 			ui.Column(c).Gap(10).Children(func() {
 				ui.Text(c, m.target).Muted().Ellipsis()
@@ -523,6 +524,20 @@ func (m *model) openFolder() {
 	m.setRoot(dir)
 }
 
+// ensureFolder opens the folder chooser when no folder is open yet, so a new
+// note or folder has a home. It reports whether a folder is open afterwards.
+func (m *model) ensureFolder() bool {
+	if m.root != "" {
+		return true
+	}
+	dir, err := app.OpenDirectory(app.OpenDirectoryOptions{Title: "选择笔记文件夹"})
+	if err != nil || dir == "" {
+		return false
+	}
+	m.setRoot(dir)
+	return true
+}
+
 func (m *model) setRoot(dir string) {
 	m.root = dir
 	m.sel = ""
@@ -623,7 +638,7 @@ func (m *model) save() {
 }
 
 func (m *model) beginNew(dir string) {
-	if m.root == "" {
+	if !m.ensureFolder() {
 		return
 	}
 	if dir == "" {
@@ -661,7 +676,7 @@ func (m *model) createFile() {
 }
 
 func (m *model) beginNewFolder(dir string) {
-	if m.root == "" {
+	if !m.ensureFolder() {
 		return
 	}
 	if dir == "" {
