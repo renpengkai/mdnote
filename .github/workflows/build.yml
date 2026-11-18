@@ -5,8 +5,8 @@
 # "building for darwin needs a macOS host"）。所以 Mac 版必须在 macOS 上构建。
 #
 # 用法：把本目录作为仓库根目录推到 GitHub，Actions 会自动产出：
-#   mdnote-macos-arm64  （Apple Silicon，MDNote.app + zip）
-#   mdnote-macos-amd64  （Intel，MDNote.app + zip）
+#   mdnote-macos-arm64  （Apple Silicon，MDNote.app 的 zip）
+#   mdnote-macos-amd64  （Intel，MDNote.app 的 zip）
 #   mdnote-windows-amd64 / mdnote-linux-amd64
 name: build
 
@@ -26,9 +26,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14   # Apple Silicon
+          - runner: macos-15        # Apple Silicon (arm64)
             arch: arm64
-          - runner: macos-13   # Intel
+          - runner: macos-15-intel  # Intel (x86_64)
             arch: amd64
     steps:
       - uses: actions/checkout@v4
