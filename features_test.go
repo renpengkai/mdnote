@@ -193,16 +193,27 @@ func TestCreateFolder(t *testing.T) {
 	}
 }
 
-func TestNewFolderFromMenu(t *testing.T) {
+func TestNewFolderFromSidebar(t *testing.T) {
 	dir := t.TempDir()
 	m := newModel()
 	m.setRoot(dir)
 	driver := open(t, m)
-	click(t, driver, "更多")
 	click(t, driver, "新建文件夹")
 	click(t, driver, "创建")
 	if info, err := os.Stat(filepath.Join(dir, "新建文件夹")); err != nil || !info.IsDir() {
-		t.Fatalf("the folder was not created from the menu: %v", err)
+		t.Fatalf("the folder was not created from the sidebar: %v", err)
+	}
+}
+
+func TestNewFileFromSidebar(t *testing.T) {
+	dir := t.TempDir()
+	m := newModel()
+	m.setRoot(dir)
+	driver := open(t, m)
+	click(t, driver, "新建文件")
+	click(t, driver, "创建")
+	if _, err := os.Stat(filepath.Join(dir, "新笔记.md")); err != nil {
+		t.Fatalf("the file was not created from the sidebar: %v", err)
 	}
 }
 
@@ -330,5 +341,87 @@ func TestModeSwitcher(t *testing.T) {
 	click(t, driver, "分栏")
 	if m.mode != splitView {
 		t.Fatalf("the mode switcher left the mode at %v", m.mode)
+	}
+}
+
+func TestCodeLang(t *testing.T) {
+	cases := map[string]string{
+		"App.java":     "java",
+		"Main.kt":      "kotlin",
+		"pom.xml":      "xml",
+		"package.json": "json",
+		"index.html":   "html",
+		"app.ts":       "typescript",
+		"main.go":      "go",
+		"style.css":    "css",
+		"notes.md":     "",
+		"readme.txt":   "",
+		"photo.png":    "",
+	}
+	for name, want := range cases {
+		if got := codeLang(name); got != want {
+			t.Errorf("codeLang(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestTreeFile(t *testing.T) {
+	for _, name := range []string{"note.md", "readme.txt", "App.java", "pom.xml", "package.json"} {
+		if !treeFile(name) {
+			t.Errorf("treeFile(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"icon.png", "clip.mp4", "data.bin"} {
+		if treeFile(name) {
+			t.Errorf("treeFile(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestTreeListsJavaProject(t *testing.T) {
+	dir := t.TempDir()
+	writeNote(t, filepath.Join(dir, "src", "main", "java", "App.java"), "public class App {}\n")
+	writeNote(t, filepath.Join(dir, "pom.xml"), "<project/>\n")
+	writeNote(t, filepath.Join(dir, "package.json"), "{}\n")
+	writeNote(t, filepath.Join(dir, "logo.png"), "x")
+
+	budget, key := 4000, 0
+	rows := scanDir(dir, 0, &budget, &key)
+	var names []string
+	for _, e := range rows {
+		names = append(names, e.name)
+	}
+	want := []string{"src", "package.json", "pom.xml"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("scanDir listed %v, want %v", names, want)
+	}
+	if len(rows[0].kids) != 1 || rows[0].kids[0].name != "main" {
+		t.Fatalf("the src folder holds %v", rows[0].kids)
+	}
+}
+
+func TestOpenJavaFileShowsHighlightedPreview(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "App.java")
+	writeNote(t, path, "public class App {}\n")
+
+	m := newModel()
+	m.setRoot(dir)
+	driver := open(t, m)
+	click(t, driver, "App.java")
+
+	if m.path != path {
+		t.Fatalf("clicking App.java opened %q, want %q", m.path, path)
+	}
+	if m.lang != "java" {
+		t.Fatalf("the opened file has language %q, want java", m.lang)
+	}
+	// A source file is read-only: no editor is declared, so the mode switcher
+	// and the text area are absent and the whole pane is the highlighted code.
+	if enabled(driver, "编辑") {
+		t.Fatal("a source file still offers the 编辑 mode")
+	}
+	if enabled(driver, "Markdown 源码") {
+		t.Fatal("a source file still shows the editor")
 	}
 }

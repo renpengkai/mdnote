@@ -69,10 +69,12 @@ type model struct {
 	path  string
 	text  string
 	saved string
+	lang  string // the code language of a source file, "" for a note
 
 	doc     markdown.Document
 	view    components.MarkdownView
 	mdText  string
+	mdLang  string
 	mdWidth float32
 	mdH     float32
 
@@ -109,7 +111,12 @@ type model struct {
 
 func newModel() *model {
 	m := &model{
-		theme:  gfx.LightTheme(),
+		theme: gfx.LightTheme(),
+		// A note opens in the split view: the editor on the left, the rendered
+		// preview with its highlighted code on the right. The editor itself is
+		// the platform's plain text control, which cannot color code, so the
+		// split is what makes the highlighting visible without a click.
+		mode:   splitView,
 		modes:  []mode{editOnly, splitView, previewOnly},
 		split:  ui.SplitterState{Pos: 260},
 		autoOn: true,
@@ -181,12 +188,6 @@ func (m *model) moreMenu(c ui.C) {
 		m.menu = !m.menu
 	}
 	ui.Menu(c, anchor, &m.menu, func(menu *ui.MenuItems) {
-		if menu.Item("新建文件").Clicked() {
-			m.beginNew(m.folderOf(m.sel))
-		}
-		if menu.Item("新建文件夹").Clicked() {
-			m.beginNewFolder(m.folderOf(m.sel))
-		}
 		if menu.Item("重命名").Disabled(m.sel == "").Clicked() {
 			m.beginRename()
 		}
@@ -256,6 +257,8 @@ func (m *model) sidebar(c ui.C) {
 			})
 			return
 		}
+		m.sidebarActions(c)
+		ui.Divider(c)
 		ui.Tree(c, &m.tree, len(m.visible), m.label, nil).Grow(1)
 		if i, ok := m.tree.Toggled(); ok {
 			e := m.visible[i]
@@ -280,6 +283,13 @@ func (m *model) workspace(c ui.C) {
 			})
 			return
 		}
+		if m.lang != "" {
+			// A source file is read-only: the whole pane is its highlighted code.
+			ui.Column(c).Grow(1).FillHeight().Background(m.theme.Card).Children(func() {
+				m.preview(c, pane)
+			})
+			return
+		}
 		switch m.mode {
 		case editOnly:
 			m.editor(c)
@@ -296,6 +306,23 @@ func (m *model) workspace(c ui.C) {
 			})
 		}
 		m.modeSwitcher(c)
+	})
+}
+
+// sidebarActions is the small row above the tree: 新建文件 and 新建文件夹 act on
+// the selected folder, or on the root when nothing is selected.
+func (m *model) sidebarActions(c ui.C) {
+	ui.Row(c).FillWidth().Pad(8).Gap(6).Items(ui.Center).Children(func() {
+		if ui.Button(c, "新建文件").Outline().Small().Clicked() {
+			m.beginNew(m.folderOf(m.sel))
+		}
+		if ui.Button(c, "新建文件夹").Outline().Small().Clicked() {
+			m.beginNewFolder(m.folderOf(m.sel))
+		}
+		ui.Spacer(c)
+		if ui.Button(c, "打开文件夹").Outline().Small().Clicked() {
+			m.openFolder()
+		}
 	})
 }
 
@@ -328,11 +355,17 @@ func (m *model) paintPreview(d *ui.DrawContext) {
 // layoutPreview parses and measures the note, but only when the text or the
 // width changed: Layout is the expensive half of the preview.
 func (m *model) layoutPreview(canvas *gfx.Canvas, width float32) {
-	if width <= 0 || (m.mdText == m.text && m.mdWidth == width) {
+	if width <= 0 || (m.mdText == m.text && m.mdWidth == width && m.mdLang == m.lang) {
 		return
 	}
-	m.doc.Parse(m.text)
-	m.mdText, m.mdWidth = m.text, width
+	// A source file is shown as one fenced block of its own language, so the
+	// same highlighter that colors a note's code colors the whole file.
+	source := m.text
+	if m.lang != "" {
+		source = "```" + m.lang + "\n" + m.text + "\n```"
+	}
+	m.doc.Parse(source)
+	m.mdText, m.mdWidth, m.mdLang = m.text, width, m.lang
 	m.mdH = m.view.Layout(canvas, components.MarkdownStyle{
 		Size:       m.theme.Metrics.FontSizeM,
 		LineHeight: 22,
@@ -621,6 +654,7 @@ func (m *model) openFile(path string) {
 	m.path = path
 	m.text = string(data)
 	m.saved = m.text
+	m.lang = codeLang(path)
 	m.mdWidth = -1
 }
 

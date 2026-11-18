@@ -11,8 +11,8 @@ Markdown 笔记应用。界面与交互参考 [motty](https://github.com/t8y2/mo
 
 | 平台 | 文件 |
 | --- | --- |
-| macOS · Apple Silicon（M 系列） | `mdnote-0.2.1-darwin-arm64.zip` |
-| macOS · Intel | `mdnote-0.2.1-darwin-amd64.zip` |
+| macOS · Apple Silicon（M 系列） | `mdnote-0.3.0-darwin-arm64.zip` |
+| macOS · Intel | `mdnote-0.3.0-darwin-amd64.zip` |
 | Windows x64 | `mdnote.exe` |
 | Linux x64 | `mdnote` |
 
@@ -38,10 +38,12 @@ xattr -dr com.apple.quarantine MDNote.app
 
 ## 功能
 
-- **文件夹 + 文件树**：打开一个文件夹，左侧列出其中的 Markdown/文本文件（文件夹优先、按名排序，可折叠）。
-- **新建文件夹**：在「更多」菜单里新建子文件夹，文件树即时刷新。
+- **文件夹 + 文件树**：打开一个文件夹，左侧列出其中的 Markdown/文本文件与源码文件（文件夹优先、按名排序，可折叠）。
+- **打开 Java 项目**：文件树识别 `.java` / `.kt` / `.xml` / `.json` / `.go` / `.py` 等源码文件，
+  直接打开一个 Java / Maven / Web 项目也能浏览并高亮阅读（源码文件以只读高亮预览呈现）。
+- **新建文件 / 新建文件夹**：放在**左侧文件树顶部**，作用于选中的文件夹（未选中则作用于根目录）。
 - **三种视图**：`编辑`（纯源码）/ `分栏`（左源码右预览）/ `预览`（纯渲染）。
-  切换控件缩小后浮在**右下角**，不占工具栏空间。
+  打开笔记默认进入**分栏**，代码高亮一眼可见；切换控件缩小后浮在**右下角**，不占工具栏空间。
 - **Markdown 渲染**：标题、粗体、斜体、删除线、行内代码、链接、图片、列表、引用、代码块、表格、分隔线。
 - **代码高亮**：内置轻量高亮器，覆盖 **Java**（以及 Kotlin/Go/C/C++/C#/JS/TS/Rust/Swift/PHP/CSS/SQL 等 C 系语言）、
   **XML**（含 HTML / SVG / XAML / Maven POM）、**JSON**（含 JSONC / JSON5），随明暗主题配色。
@@ -50,9 +52,9 @@ xattr -dr com.apple.quarantine MDNote.app
 - **多格式导出**：导出为 **DOCX / HTML / TXT**（「导出」按钮或「更多 → 导出为」）。
 - **Word 互转**：`导入 Word…` 把 `.docx` 转成 Markdown 并打开；`导出为 DOCX` 把当前笔记写成 `.docx`。
   手写最小 OOXML，**不引入任何第三方依赖**。
-- **新建 / 重命名 / 删除**：工具栏「新建笔记」与「更多」菜单，删除前二次确认。
+- **新建 / 重命名 / 删除**：工具栏「新建笔记」、文件树顶部「新建文件 / 新建文件夹」与「更多」菜单，删除前二次确认。
 - **明暗主题**：工具栏一键切换（深色 / 浅色）。
-- **应用图标**：打包进可执行文件与 macOS `.app`。
+- **应用图标**：macOS 15+ 风格（squircle 圆角 + 四周留白），打包进 macOS `.app` 与 Windows 可执行文件。
 - **目录监听**：外部改动文件夹时自动刷新文件树。
 - **状态栏**：显示当前文件路径、字符数 / 词数、未保存 / 已自动保存提示。
 - 命令行可传入文件或文件夹直接打开：`mdnote.exe <路径>`。
@@ -82,6 +84,16 @@ go build -trimpath -ldflags='-s -w -buildid=' -o mdnote.exe .
 
 ```sh
 go build -o mdnote-dev.exe .
+```
+
+Windows 可执行文件的图标与版本信息由仓库里的 `rsrc_windows_amd64.syso` 提供，
+`go build` 会自动把它链进 `mdnote.exe`。换图标后重新生成：
+
+```sh
+go install github.com/tc-hib/go-winres@latest
+go-winres simply --arch amd64 --manifest none --out rsrc --icon icon.png \
+  --product-name MDNote --file-description "MDNote — 极简 Markdown 笔记应用" \
+  --product-version 0.3.0.0 --file-version 0.3.0.0
 ```
 
 ## 编译 macOS 版本
@@ -133,7 +145,7 @@ runner** 上编译并上传可下载的产物：
 ## 测试
 
 ```sh
-go test ./... -count=1   # 19 个单元测试
+go test ./... -count=1   # 27 个单元测试
 go vet ./...             # 静态检查
 ```
 
@@ -156,9 +168,10 @@ VIVA_HEADLESS=1 ./mdnote-headless.exe <文件夹>
 | `highlight.go` | 轻量语法高亮：Java 等 C 系语言、XML 家族、JSON 家族 |
 | `docx.go` | 手写最小 OOXML：Markdown ⇄ `.docx`（无第三方依赖） |
 | `export.go` | HTML / TXT 导出 |
-| `icon.png` | 应用图标（1024×1024） |
+| `icon.png` | 应用图标（1024×1024，macOS 15+ squircle 风格） |
+| `rsrc_windows_amd64.syso` | Windows 可执行文件的图标与版本资源（由 go-winres 从 `icon.png` 生成） |
 | `main_test.go` | 基础单元测试（打开、保存、主题、新建对话框、扫描、原子写入） |
-| `features_test.go` | 新功能单元测试（高亮、docx 往返、导出、新建文件夹、自动保存、右下角切换） |
+| `features_test.go` | 新功能单元测试（高亮、docx 往返、导出、新建文件/文件夹、源码文件、自动保存、右下角切换） |
 | `headless.go` | `vivahead` 标签下的无头测试入口（仅测试用） |
 | `viva.toml` | 应用元信息、关联文件类型、图标、`[mac]` 打包设置 |
 | `build-macos.sh` | 在 macOS 上一键构建 `.app` 的脚本 |

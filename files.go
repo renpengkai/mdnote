@@ -16,6 +16,89 @@ func noteExt(name string) bool {
 	return false
 }
 
+// codeLang is the language of a source file the tree shows and the preview
+// highlights, or "" for a name that is not one. It is what lets the app open a
+// Java project, a web folder or any other tree of code, not only notes.
+func codeLang(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".java":
+		return "java"
+	case ".kt", ".kts":
+		return "kotlin"
+	case ".scala":
+		return "scala"
+	case ".groovy", ".gradle":
+		return "groovy"
+	case ".xml", ".xsl", ".xslt", ".xsd", ".svg", ".plist", ".csproj", ".xaml", ".pom":
+		return "xml"
+	case ".html", ".htm", ".xhtml":
+		return "html"
+	case ".json", ".jsonc", ".json5":
+		return "json"
+	case ".js", ".mjs", ".cjs":
+		return "javascript"
+	case ".jsx":
+		return "jsx"
+	case ".ts":
+		return "typescript"
+	case ".tsx":
+		return "tsx"
+	case ".go":
+		return "go"
+	case ".c", ".h":
+		return "c"
+	case ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx":
+		return "cpp"
+	case ".cs":
+		return "csharp"
+	case ".rs":
+		return "rust"
+	case ".swift":
+		return "swift"
+	case ".php":
+		return "php"
+	case ".rb":
+		return "ruby"
+	case ".py", ".pyw":
+		return "python"
+	case ".dart":
+		return "dart"
+	case ".css":
+		return "css"
+	case ".scss", ".sass":
+		return "scss"
+	case ".less":
+		return "less"
+	case ".sql":
+		return "sql"
+	case ".sh", ".bash", ".zsh":
+		return "bash"
+	case ".yml", ".yaml":
+		return "yaml"
+	case ".toml":
+		return "toml"
+	case ".ini", ".cfg", ".conf", ".properties", ".env":
+		return "ini"
+	case ".m", ".mm":
+		return "objectivec"
+	case ".pl", ".pm":
+		return "perl"
+	case ".lua":
+		return "lua"
+	case ".r":
+		return "r"
+	case ".vue":
+		return "vue"
+	}
+	return ""
+}
+
+// treeFile reports whether the tree lists name: a note the app edits, or a
+// source file it shows with its code highlighted.
+func treeFile(name string) bool {
+	return noteExt(name) || codeLang(name) != ""
+}
+
 // skipName is what the tree and the directory watch leave out: dot files and
 // dot directories, and the folders build tools fill with noise.
 func skipName(name string) bool {
@@ -47,7 +130,7 @@ func scanDir(dir string, depth int, budget, key *int) []*entry {
 		path := filepath.Join(dir, name)
 		if it.IsDir() {
 			rows = append(rows, &entry{name: name, path: path, dir: true, depth: depth})
-		} else if noteExt(name) {
+		} else if treeFile(name) {
 			rows = append(rows, &entry{name: name, path: path, depth: depth})
 		}
 	}
