@@ -5,6 +5,25 @@ Markdown 笔记应用。界面与交互参考 [motty](https://github.com/t8y2/mo
 功能形态参考 [mkdown-site](https://github.com/gggaiitx/mkdown-site)，但**以体积尽可能小为目标**：
 最终发布版单文件可执行程序约 **5.5 MB**，无运行时依赖、无 Electron、无 WebView。
 
+## 下载
+
+已构建好的二进制在 [Releases](https://github.com/renpengkai/mdnote/releases/latest)：
+
+| 平台 | 文件 |
+| --- | --- |
+| macOS · Apple Silicon（M 系列） | `mdnote-0.1.0-darwin-arm64.zip` |
+| macOS · Intel | `mdnote-0.1.0-darwin-amd64.zip` |
+| Windows x64 | `mdnote.exe` |
+| Linux x64 | `mdnote` |
+
+macOS 未签名，首次打开需要去掉隔离标记：
+
+```sh
+xattr -dr com.apple.quarantine MDNote.app
+```
+
+（或右键 `MDNote.app` → 打开 → 弹窗里再点「打开」。）
+
 ## 界面预览
 
 浅色 · 预览模式：
@@ -84,11 +103,12 @@ go build -o viva github.com/vivaui/viva/cmd/viva                    # viva 打�
 仓库已带 `.github/workflows/build.yml`：推到 GitHub 后，Actions 会在**真实的 macOS
 runner** 上编译并上传可下载的产物：
 
-- `mdnote-macos-arm64` — Apple Silicon（M 系列）
-- `mdnote-macos-amd64` — Intel
+- `mdnote-macos-arm64` — Apple Silicon（`macos-15`）
+- `mdnote-macos-amd64` — Intel（`macos-15-intel`）
 - `mdnote-windows-amd64` / `mdnote-linux-amd64`
 
 在 Actions 页面选择对应 run，下载 Artifact 即可得到 `MDNote.app`（zip 包）。
+注意 `macos-14` / `macos-13` 已被 GitHub 退役，用了会直接取消或永远排队。
 
 ### 说明
 
@@ -96,8 +116,8 @@ runner** 上编译并上传可下载的产物：
   `xattr -dr com.apple.quarantine MDNote.app`。
 - 正式分发需 Apple 开发者证书签名与公证：
   `./viva package --target darwin --sign-identity "Developer ID Application: ..."`。
-- 本项目在 Windows 上开发，**macOS 二进制未在本机产出**（环境无 macOS SDK / clang）；
-  Mac 版请按上面任一方式构建。
+- 本项目在 Windows 上开发，**macOS 二进制由 GitHub Actions 在真实 macOS runner 上产出**
+  （Windows 环境无 macOS SDK / clang，无法交叉编译）。
 
 ## 测试
 
