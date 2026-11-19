@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -79,6 +80,10 @@ type model struct {
 	mdLang  string
 	mdWidth float32
 	mdH     float32
+	// layoutDue is set when a deferred width settle timer fires so the next
+	// paint runs Parse/Layout once; intermediate fullscreen sizes are ignored.
+	layoutDue   atomic.Bool
+	layoutTimer *time.Timer
 
 	statsText  string
 	statsCache string
@@ -87,6 +92,11 @@ type model struct {
 	invalidator app.Invalidator
 	watch       *app.DirectoryWatch
 	changes     []string
+	// rescanQueued coalesces directory-watch wakes: a large open tree +
+	// FSEvents resync during fullscreen must not rescan on the UI thread
+	// for every burst, or clicks stop responding.
+	rescanQueued atomic.Bool
+	rescanTimer  *time.Timer
 
 	menu       bool
 	exportOpen bool
@@ -147,6 +157,13 @@ func (m *model) page(c ui.C) {
 	}
 	if ui.Shortcut(c, ui.Primary, "n") {
 		m.beginNew("")
+	}
+	if m.rescanQueued.Swap(false) {
+		if m.rescanTimer != nil {
+			m.rescanTimer.Stop()
+			m.rescanTimer = nil
+		}
+		m.rescan()
 	}
 	m.autoArm()
 
@@ -402,17 +419,70 @@ func (m *model) paintPreview(d *ui.DrawContext) {
 	})
 }
 
+// layoutSettle is how long the preview waits after the last width change
+// before it runs Parse/Layout again. Fullscreen animates many sizes in a row.
+const layoutSettle = 120 * time.Millisecond
+
+// rescanSettle coalesces directory-watch wakes before walking a large tree.
+const rescanSettle = 200 * time.Millisecond
+
 // layoutPreview parses and measures the note, but only when the text or the
 // width changed: Layout is the expensive half of the preview.
 func (m *model) layoutPreview(canvas *gfx.Canvas, width float32) {
-	if width <= 0 || (m.mdText == m.text && m.mdWidth == width && m.mdLang == m.lang) {
+	if width <= 0 {
 		return
 	}
-	// A source file is shown as one fenced block of its own language, so the
-	// same highlighter that colors a note's code colors the whole file.
+	// Quantize width so intermediate fullscreen sizes share one layout.
+	width = float32(int(width)/8) * 8
+	if width <= 0 {
+		return
+	}
+	contentChanged := m.mdText != m.text || m.mdLang != m.lang
+	if !contentChanged && m.mdWidth == width {
+		m.layoutDue.Store(false)
+		return
+	}
+	if contentChanged {
+		m.layoutDue.Store(false)
+		if m.layoutTimer != nil {
+			m.layoutTimer.Stop()
+			m.layoutTimer = nil
+		}
+		m.applyPreviewLayout(canvas, width)
+		return
+	}
+	// Pure width change (resize / fullscreen): wait until sizes settle.
+	if m.layoutDue.Swap(false) {
+		m.applyPreviewLayout(canvas, width)
+		return
+	}
+	m.armLayoutSettle()
+}
+
+func (m *model) armLayoutSettle() {
+	if m.layoutTimer != nil {
+		m.layoutTimer.Stop()
+	}
+	m.layoutTimer = time.AfterFunc(layoutSettle, func() {
+		m.layoutDue.Store(true)
+		m.invalidator.Invalidate()
+	})
+}
+
+// applyPreviewLayout runs Parse/Layout for width.
+func (m *model) applyPreviewLayout(canvas *gfx.Canvas, width float32) {
+	if width <= 0 {
+		return
+	}
 	source := m.text
 	if m.lang != "" {
-		source = "```" + m.lang + "\n" + m.text + "\n```"
+		// Cap highlighted preview work for huge sources so a multi‑MB file
+		// cannot lock the window for seconds on every settle.
+		const maxPreviewRunes = 200_000
+		if r := []rune(source); len(r) > maxPreviewRunes {
+			source = string(r[:maxPreviewRunes]) + "\n\n…（预览已截断）\n"
+		}
+		source = "```" + m.lang + "\n" + source + "\n```"
 	}
 	m.doc.Parse(source)
 	m.mdText, m.mdWidth, m.mdLang = m.text, width, m.lang
@@ -654,8 +724,20 @@ func (m *model) wake() {
 	ch := m.watch.Changes(m.changes[:0])
 	m.changes = ch.Names
 	if len(m.changes) > 0 || ch.Resync {
-		m.rescan()
+		m.scheduleRescan()
 	}
+}
+
+// scheduleRescan coalesces watch wakes so a large tree is not walked on every
+// FSEvents burst (common during fullscreen and autosave renames).
+func (m *model) scheduleRescan() {
+	m.rescanQueued.Store(true)
+	if m.rescanTimer != nil {
+		m.rescanTimer.Stop()
+	}
+	m.rescanTimer = time.AfterFunc(rescanSettle, func() {
+		m.invalidator.Invalidate()
+	})
 }
 
 func (m *model) rescan() {
@@ -979,6 +1061,14 @@ func (m *model) close() {
 	if m.timer != nil {
 		m.timer.Stop()
 		m.timer = nil
+	}
+	if m.layoutTimer != nil {
+		m.layoutTimer.Stop()
+		m.layoutTimer = nil
+	}
+	if m.rescanTimer != nil {
+		m.rescanTimer.Stop()
+		m.rescanTimer = nil
 	}
 }
 

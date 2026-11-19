@@ -497,6 +497,50 @@ func TestFormatJSON(t *testing.T) {
 	}
 }
 
+func TestLayoutPreviewDefersWidthOnlyChanges(t *testing.T) {
+	m := newModel()
+	m.text = "hello"
+	m.saved = m.text
+	m.mdText = m.text
+	m.mdLang = ""
+	m.mdWidth = 400
+	m.mdH = 100
+
+	// A pure width change must not layout immediately (fullscreen storm).
+	m.layoutPreview(nil, 480)
+	if m.mdWidth != 400 {
+		t.Fatalf("width-only change laid out immediately to %v", m.mdWidth)
+	}
+	if m.layoutTimer == nil {
+		t.Fatal("width-only change did not arm a settle timer")
+	}
+	m.layoutTimer.Stop()
+	m.layoutTimer = nil
+
+	// Settle flag is what the timer sets; consuming it is what allows layout.
+	m.layoutDue.Store(true)
+	if !m.layoutDue.Swap(false) {
+		t.Fatal("layoutDue could not be consumed")
+	}
+	if m.layoutDue.Load() {
+		t.Fatal("layoutDue remained set after swap")
+	}
+}
+
+func TestScheduleRescanCoalesces(t *testing.T) {
+	m := newModel()
+	m.scheduleRescan()
+	m.scheduleRescan()
+	if !m.rescanQueued.Load() {
+		t.Fatal("scheduleRescan did not queue a rescan")
+	}
+	if m.rescanTimer == nil {
+		t.Fatal("scheduleRescan did not arm a timer")
+	}
+	m.rescanTimer.Stop()
+	m.rescanTimer = nil
+}
+
 func TestSidebarHasNoDuplicateOpenFolder(t *testing.T) {
 	dir := t.TempDir()
 	m := newModel()

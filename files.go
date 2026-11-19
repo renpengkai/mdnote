@@ -113,9 +113,8 @@ func skipName(name string) bool {
 }
 
 // maxDirEntries caps how many rows one folder contributes, so a single huge
-// directory cannot stall the window. Siblings of other folders are unaffected
-// because scanDir no longer walks the whole tree up front.
-const maxDirEntries = 8000
+// directory cannot stall the window (especially across fullscreen resizes).
+const maxDirEntries = 2000
 
 // scanDir lists one directory as tree rows: folders first, then notes and
 // source files, each group sorted by name. It does not recurse; loadKids fills
