@@ -11,8 +11,8 @@ Markdown 笔记应用。界面与交互参考 [motty](https://github.com/t8y2/mo
 
 | 平台 | 文件 |
 | --- | --- |
-| macOS · Apple Silicon（M 系列） | `mdnote-0.3.2-darwin-arm64.zip` |
-| macOS · Intel | `mdnote-0.3.2-darwin-amd64.zip` |
+| macOS · Apple Silicon（M 系列） | `mdnote-0.3.3-darwin-arm64.zip` |
+| macOS · Intel | `mdnote-0.3.3-darwin-amd64.zip` |
 | Windows x64 | `mdnote.exe` |
 | Linux x64 | `mdnote` |
 
@@ -97,7 +97,7 @@ Windows 可执行文件的图标与版本信息由仓库里的 `rsrc_windows_amd
 go install github.com/tc-hib/go-winres@latest
 go-winres simply --arch amd64 --manifest none --out rsrc --icon icon.png \
   --product-name MDNote --file-description "MDNote — 极简 Markdown 笔记应用" \
-  --product-version 0.3.2.0 --file-version 0.3.2.0
+  --product-version 0.3.3.0 --file-version 0.3.3.0
 ```
 
 ## 编译 macOS 版本
