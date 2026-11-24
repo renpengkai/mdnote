@@ -546,7 +546,7 @@ func TestSidebarHasNoDuplicateOpenFolder(t *testing.T) {
 	m := newModel()
 	m.setRoot(dir)
 	driver := open(t, m)
-	// Toolbar keeps 打开文件夹; the tree action row must not repeat it.
+	// Toolbar keeps 打开文件夹; the empty-state duplicate is gone.
 	n := 0
 	for _, hit := range driver.Snapshot().Hits {
 		if hit.Label == "打开文件夹" && !hit.IsLabel {
@@ -555,5 +555,47 @@ func TestSidebarHasNoDuplicateOpenFolder(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("打开文件夹 appeared %d times, want 1", n)
+	}
+	if !enabled(driver, "打开文件") {
+		t.Fatal("打开文件 is missing once a folder is open")
+	}
+}
+
+func TestEmptyStateOffersOpenFile(t *testing.T) {
+	m := newModel()
+	driver := open(t, m)
+	if !enabled(driver, "打开文件") {
+		t.Fatal("empty state has no 打开文件")
+	}
+	folder := 0
+	for _, hit := range driver.Snapshot().Hits {
+		if hit.Label == "打开文件夹" && !hit.IsLabel {
+			folder++
+		}
+	}
+	if folder != 1 {
+		t.Fatalf("empty state still repeats 打开文件夹: %d", folder)
+	}
+}
+
+func TestOpenPathOpensFileAndRoot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "App.java")
+	writeNote(t, path, "public class App {}\n")
+
+	m := newModel()
+	driver := open(t, m)
+	if err := driver.QueueOpenFiles([]string{path}, nil); err != nil {
+		t.Fatal(err)
+	}
+	click(t, driver, "打开文件")
+	if m.root != dir {
+		t.Fatalf("openPath root = %q, want %q", m.root, dir)
+	}
+	if m.path != path {
+		t.Fatalf("openPath opened %q, want %q", m.path, path)
+	}
+	if m.lang != "java" {
+		t.Fatalf("openPath language = %q, want java", m.lang)
 	}
 }

@@ -155,6 +155,9 @@ func (m *model) page(c ui.C) {
 	if ui.Shortcut(c, ui.Primary, "o") {
 		m.openFolder()
 	}
+	if ui.Shortcut(c, ui.Primary|ui.Shift, "o") {
+		m.openPath()
+	}
 	if ui.Shortcut(c, ui.Primary, "n") {
 		m.beginNew("")
 	}
@@ -186,6 +189,13 @@ func (m *model) toolbar(c ui.C) {
 	ui.Row(c).FillWidth().Pad(8).Gap(8).Items(ui.Center).Children(func() {
 		if ui.Button(c, "打开文件夹").Outline().Clicked() {
 			m.openFolder()
+		}
+		// 打开文件 is always on the toolbar once a folder is open; the empty
+		// sidebar shows it instead so the two "打开文件夹" labels are not repeated.
+		if m.root != "" {
+			if ui.Button(c, "打开文件").Outline().Clicked() {
+				m.openPath()
+			}
 		}
 		if ui.Button(c, "新建笔记").Outline().Clicked() {
 			m.beginNew("")
@@ -272,8 +282,8 @@ func (m *model) sidebar(c ui.C) {
 		if m.root == "" {
 			ui.Column(c).Pad(16).Gap(10).Children(func() {
 				ui.Text(c, "还没有打开文件夹").Muted()
-				if ui.Button(c, "打开文件夹").Clicked() {
-					m.openFolder()
+				if ui.Button(c, "打开文件").Clicked() {
+					m.openPath()
 				}
 			})
 			return
@@ -678,6 +688,54 @@ func (m *model) openFolder() {
 		return
 	}
 	m.setRoot(dir)
+}
+
+// openPath lets the user pick a single note or source file: its parent folder
+// becomes the tree root (or stays if already under the open root), then the
+// file is opened for editing.
+func (m *model) openPath() {
+	paths, err := app.OpenFiles(app.OpenFileOptions{
+		Title: "打开文件",
+		Filters: []app.FileFilter{
+			{Name: "笔记与源码", Pattern: "*.md;*.markdown;*.txt;*.java;*.json;*.xml;*.go;*.py;*.js;*.ts;*.css;*.html;*.kt;*.rs;*.swift"},
+			{Name: "所有文件", Pattern: "*.*"},
+		},
+	})
+	if err != nil || len(paths) == 0 {
+		return
+	}
+	path := paths[0]
+	info, err := os.Stat(path)
+	if err != nil {
+		m.toaster.Show("无法打开", err.Error(), ui.ToastError)
+		return
+	}
+	if info.IsDir() {
+		m.setRoot(path)
+		return
+	}
+	dir := filepath.Dir(path)
+	if m.root == "" || !underRoot(path, m.root) {
+		m.setRoot(dir)
+	} else {
+		m.rescan()
+	}
+	m.sel = path
+	m.openFile(path)
+}
+
+// underRoot reports whether path is root itself or lies inside it.
+func underRoot(path, root string) bool {
+	if root == "" {
+		return false
+	}
+	cleanPath := filepath.Clean(path)
+	cleanRoot := filepath.Clean(root)
+	if cleanPath == cleanRoot {
+		return true
+	}
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(cleanPath, cleanRoot+sep)
 }
 
 // ensureFolder opens the folder chooser when no folder is open yet, so a new
